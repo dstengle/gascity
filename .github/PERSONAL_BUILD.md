@@ -19,11 +19,12 @@ or personal experiments. Two GitHub Actions workflows keep it alive:
 These commits sit on top of upstream `main`. Keep this list current whenever
 you add or drop a patch.
 
-| Commit | Description |
-|--------|-------------|
-| `faaf24ef` | fix: skip clearWakeFailures write when values already cleared |
-| `e2f14b61` | fix: recover dolt-state.json from stale or missing provider state |
-| `2287dc4e` | fix: ensure gc init sets issue_prefix in beads database |
+| Commit | Branch | Description |
+|--------|--------|-------------|
+| `faaf24ef` | `fix/session-reconciler-no-op-writes` | fix: skip clearWakeFailures write when values already cleared |
+| `e2f14b61` | `fix/dolt-state-missing-recovery` | fix: recover dolt-state.json from stale or missing provider state |
+| `2287dc4e` | `fix/gc-init-issue-prefix` | fix: ensure gc init sets issue_prefix in beads database |
+| `ff907482` | `fix/darwin-cross-compile` | fix: cast stat.Dev/Ino to uint64 for darwin cross-compilation |
 
 ## Day-to-day operations
 
@@ -36,13 +37,28 @@ Or trigger a build manually: **Actions → Build personal gc binaries → Run wo
 
 ### Adding a new patch
 
+Every patch lives on its own branch first — never commit directly to
+`personal/main`.
+
 ```bash
+# 1. Create a branch off upstream main
+git fetch upstream main
+git checkout -b fix/my-description upstream/main
+
+# 2. Make your change and commit
+git add ...
+git commit -m "fix: description"
+git push origin fix/my-description
+
+# 3. Cherry-pick onto personal/main
 git checkout personal/main
 git cherry-pick <commit-sha>
-git push origin personal/main   # triggers a build automatically
-```
 
-Update the patches table above in the same push.
+# 4. Update the patches table in PERSONAL_BUILD.md, then push
+git add .github/PERSONAL_BUILD.md
+git commit --amend --no-edit   # fold into the cherry-pick
+git push --force-with-lease origin personal/main
+```
 
 ### Dropping a patch (merged upstream or no longer needed)
 
