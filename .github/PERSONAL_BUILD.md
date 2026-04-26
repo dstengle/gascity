@@ -1,0 +1,99 @@
+# Personal build workflow
+
+This documents how `dstengle/gascity` maintains a personal patched build
+on top of upstream `gastownhall/gascity`.
+
+## What this is
+
+`personal/main` is a branch in this fork that tracks upstream `main` with a
+small set of patches applied on top — fixes that are pending upstream review
+or personal experiments. Two GitHub Actions workflows keep it alive:
+
+- **`personal-sync.yml`** — runs daily (and on demand) to rebase
+  `personal/main` onto the latest upstream `main`.
+- **`personal-build.yml`** — runs on every push to `personal/main` and
+  produces downloadable `gc` binaries for Linux and macOS (amd64 + arm64).
+
+## Current patches
+
+These commits sit on top of upstream `main`. Keep this list current whenever
+you add or drop a patch.
+
+| Commit | Description |
+|--------|-------------|
+| `faaf24ef` | fix: skip clearWakeFailures write when values already cleared |
+| `e2f14b61` | fix: recover dolt-state.json from stale or missing provider state |
+| `2287dc4e` | fix: ensure gc init sets issue_prefix in beads database |
+
+## Day-to-day operations
+
+### Getting a binary
+
+1. Go to **Actions → Build personal gc binaries** in this repo.
+2. Download the artifact for your platform from the latest run.
+
+Or trigger a build manually: **Actions → Build personal gc binaries → Run workflow**.
+
+### Adding a new patch
+
+```bash
+git checkout personal/main
+git cherry-pick <commit-sha>
+git push origin personal/main   # triggers a build automatically
+```
+
+Update the patches table above in the same push.
+
+### Dropping a patch (merged upstream or no longer needed)
+
+After the daily sync rebases the branch, verify the patch is gone:
+
+```bash
+git fetch origin personal/main
+git log --oneline upstream/main..origin/personal/main
+```
+
+If the commit no longer appears (upstream absorbed it), remove its row from
+the table above and push.
+
+### Handling a sync conflict
+
+The daily sync fails if `git rebase` hits a conflict. GitHub will send an
+email from the Actions failure. To fix it:
+
+```bash
+git fetch upstream main
+git checkout personal/main
+git rebase upstream/main
+# resolve conflicts, then:
+git rebase --continue
+git push --force-with-lease origin personal/main
+```
+
+Re-run the sync workflow after pushing to confirm it passes clean.
+
+### Rebasing a patch branch before opening a PR
+
+When contributing a patch upstream, make sure its branch is rebased on
+upstream `main` (not `personal/main`):
+
+```bash
+git fetch upstream main
+git checkout fix/my-patch
+git rebase upstream/main
+git push --force-with-lease origin fix/my-patch
+```
+
+## How the rebase sync works
+
+`personal-sync.yml` does:
+
+```
+git fetch upstream main
+git rebase upstream/main
+git push --force-with-lease origin personal/main
+```
+
+Force-with-lease is safe here because only the workflow writes to this
+branch. If a human pushes while the workflow is mid-run, the push will
+fail rather than overwrite — that's the correct behaviour.

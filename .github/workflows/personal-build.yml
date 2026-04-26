@@ -1,0 +1,56 @@
+name: Build personal gc binaries
+
+on:
+  push:
+    branches: [personal/main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and upload gc binaries
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build cross-platform binaries
+        run: |
+          mkdir -p dist
+          TAG="personal-$(date -u +%Y%m%d)-$(git rev-parse --short HEAD)"
+          LDFLAGS="-s -w -X main.version=${TAG} -X main.commit=$(git rev-parse HEAD) -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          CGO_ENABLED=0
+
+          for GOOS in linux darwin; do
+            for GOARCH in amd64 arm64; do
+              echo "Building gc-${GOOS}-${GOARCH}..."
+              CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build \
+                -ldflags "$LDFLAGS" \
+                -o "dist/gc-${GOOS}-${GOARCH}" \
+                ./cmd/gc/
+            done
+          done
+
+          echo "TAG=${TAG}" >> "$GITHUB_ENV"
+          ls -lh dist/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gc-binaries-${{ env.TAG }}
+          path: dist/
+          retention-days: 30
+
+      - name: Show patch summary
+        run: |
+          echo "### Patches applied on top of upstream/main" >> "$GITHUB_STEP_SUMMARY"
+          git remote add upstream https://github.com/gastownhall/gascity.git 2>/dev/null || true
+          git fetch upstream main -q 2>/dev/null || true
+          git log --oneline upstream/main..HEAD >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || \
+            git log --oneline -5 >> "$GITHUB_STEP_SUMMARY"
