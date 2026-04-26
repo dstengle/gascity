@@ -349,12 +349,39 @@ func normalizeCanonicalBdScopeFilesForInit(cityPath, dir, prefix, doltDatabase s
 	return enforceCanonicalScopeMetadataForInit(fsys.OSFS{}, dir, doltDatabase)
 }
 
+// validateAndSeedCanonicalBdScopeConfig validates the endpoint state and seeds
+// config.yaml but does NOT write metadata.json. This is used as a pre-flight
+// check before the backend init script runs, so that invalid endpoint state is
+// caught early without creating metadata.json — which would cause the init
+// script to mistake a fresh scope for an already-initialized one and skip
+// calling bd init (which sets issue_prefix in the database).
+func validateAndSeedCanonicalBdScopeConfig(cityPath, dir, prefix string) error {
+	if !cityUsesBdStoreContract(cityPath) {
+		return nil
+	}
+	state, ok, err := desiredScopeDoltConfigStateForInit(cityPath, dir, prefix)
+	if err != nil {
+		return err
+	}
+	if ok {
+		if err := ensureCanonicalScopeConfigState(fsys.OSFS{}, dir, state); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // initAndHookDir is the atomic unit of bead store initialization:
 // init the directory, then install event hooks. The ordering matters
 // because init (bd init) may recreate .beads/ and wipe existing hooks.
 func initAndHookDir(cityPath, dir, prefix string) error {
 	doltDatabase := canonicalScopeDoltDatabase(cityPath, dir, prefix)
-	if err := normalizeCanonicalBdScopeFilesForInit(cityPath, dir, prefix, doltDatabase); err != nil {
+	// Validate endpoint state and seed config.yaml before the backend init
+	// script runs. Do NOT write metadata.json here — its presence signals to
+	// the gc-beads-bd script that the scope is already initialized, which
+	// would cause it to skip calling bd init (preventing issue_prefix from
+	// being written to the database).
+	if err := validateAndSeedCanonicalBdScopeConfig(cityPath, dir, prefix); err != nil {
 		return err
 	}
 	if err := initBeadsForDir(cityPath, dir, prefix, doltDatabase); err != nil {

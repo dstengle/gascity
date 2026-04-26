@@ -1764,25 +1764,28 @@ op_init() {
     # server is running, always go through SQL rather than dolt init on disk.
     ensure_database_registered "$dolt_database" || true
 
-    local init_prefix="$prefix"
-    if [ "$dolt_database" != "$prefix" ]; then
-        # When the pinned Dolt database differs from the routing prefix
-        # (for example city prefix gc -> database hq), initialize bd against
-        # the actual database name and then rewrite issue_prefix afterward.
-        # Otherwise bd seeds schema into <prefix> and leaves the pinned
-        # database empty.
-        init_prefix="$dolt_database"
-    fi
-
     # Run bd init in server mode.
-    (cd "$dir" && bd init --quiet --server -p "$init_prefix" --skip-hooks --skip-agents         --server-host "$host" --server-port "$DOLT_PORT"         "$dir") || die "bd init failed for $dir"
-
-    # Drop orphan database created by bd init (upstream gt-sv1h).
-    # bd init --prefix creates beads_<prefix> on the Dolt server, but we
-    # use <prefix> as the database name. Without cleanup, orphans accumulate.
-    local orphan_db="beads_${init_prefix}"
-    if [ "$orphan_db" != "$init_prefix" ]; then
-        server_sql "DROP DATABASE IF EXISTS \`$orphan_db\`" >/dev/null 2>&1 || true
+    # When the pinned database name differs from the routing prefix (e.g. city
+    # prefix tgi -> database hq), pass --database so bd uses the existing
+    # database and stores issue_prefix as the routing prefix, not the db name.
+    if [ "$dolt_database" != "$prefix" ]; then
+        (cd "$dir" && bd init --quiet --server -p "$prefix" --database "$dolt_database" \
+            --skip-hooks --skip-agents \
+            --server-host "$host" --server-port "$DOLT_PORT" \
+            "$dir") || die "bd init failed for $dir"
+    else
+        (cd "$dir" && bd init --quiet --server -p "$prefix" --skip-hooks --skip-agents \
+            --server-host "$host" --server-port "$DOLT_PORT" \
+            "$dir") || die "bd init failed for $dir"
+        # Drop orphan database created by bd init (upstream gt-sv1h).
+        # bd init --prefix creates beads_<prefix> on the Dolt server when the
+        # database doesn't already exist. We pre-register it via
+        # ensure_database_registered, so this is usually a no-op — kept as a
+        # safety net for cases where pre-registration failed.
+        local orphan_db="beads_${prefix}"
+        if [ "$orphan_db" != "$prefix" ]; then
+            server_sql "DROP DATABASE IF EXISTS \`$orphan_db\`" >/dev/null 2>&1 || true
+        fi
     fi
 
     # GC owns canonical metadata/config normalization after this backend
