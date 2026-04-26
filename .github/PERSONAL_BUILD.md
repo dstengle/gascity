@@ -11,8 +11,28 @@ or personal experiments. Two GitHub Actions workflows keep it alive:
 
 - **`personal-sync.yml`** — runs daily (and on demand) to rebase
   `personal/main` onto the latest upstream `main`.
-- **`personal-build.yml`** — runs on every push to `personal/main` and
-  produces downloadable `gc` binaries for Linux and macOS (amd64 + arm64).
+- **`personal-build.yml`** — runs on every push to `personal/main`,
+  produces downloadable `gc` binaries for Linux and macOS (amd64 + arm64),
+  and publishes them as the rolling `personal-latest` GitHub Release.
+
+## Installing
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dstengle/gascity/personal/main/scripts/install.sh | sh
+```
+
+This detects your OS and architecture, downloads the binary from the
+`personal-latest` release, and installs it to `/usr/local/bin/gc`.
+
+**Options:**
+
+```sh
+# Install to a custom directory
+GC_INSTALL_DIR=~/.local/bin curl -fsSL .../install.sh | sh
+
+# Pin to a specific release tag
+GC_VERSION=personal-20260101-abc1234 curl -fsSL .../install.sh | sh
+```
 
 ## Current patches
 
@@ -30,6 +50,12 @@ you add or drop a patch.
 
 ### Getting a binary
 
+**Easiest — install script:**
+```sh
+curl -fsSL https://raw.githubusercontent.com/dstengle/gascity/personal/main/scripts/install.sh | sh
+```
+
+**Manual — from Actions artifacts:**
 1. Go to **Actions → Build personal gc binaries** in this repo.
 2. Download the artifact for your platform from the latest run.
 
@@ -59,6 +85,9 @@ git add .github/PERSONAL_BUILD.md
 git commit --amend --no-edit   # fold into the cherry-pick
 git push --force-with-lease origin personal/main
 ```
+
+The push triggers `personal-build.yml`, which rebuilds and updates the
+`personal-latest` release automatically.
 
 ### Dropping a patch (merged upstream or no longer needed)
 
@@ -113,3 +142,14 @@ git push --force-with-lease origin personal/main
 Force-with-lease is safe here because only the workflow writes to this
 branch. If a human pushes while the workflow is mid-run, the push will
 fail rather than overwrite — that's the correct behaviour.
+
+## How the rolling release works
+
+`personal-build.yml` builds four binaries (linux/darwin × amd64/arm64),
+generates a `checksums.txt`, deletes any existing `personal-latest` release,
+then creates a fresh one. The tag `personal-latest` is force-pushed so it
+always points to the most recent build.
+
+The `personal-latest` release is marked **pre-release** to make clear it is
+not a stable upstream release. Individual dated builds are also available as
+Actions artifacts for 30 days if you need to pin to a specific build.

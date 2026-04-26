@@ -25,7 +25,6 @@ jobs:
           mkdir -p dist
           TAG="personal-$(date -u +%Y%m%d)-$(git rev-parse --short HEAD)"
           LDFLAGS="-s -w -X main.version=${TAG} -X main.commit=$(git rev-parse HEAD) -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          CGO_ENABLED=0
 
           for GOOS in linux darwin; do
             for GOARCH in amd64 arm64; do
@@ -40,12 +39,38 @@ jobs:
           echo "TAG=${TAG}" >> "$GITHUB_ENV"
           ls -lh dist/
 
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum gc-* > checksums.txt
+          cat checksums.txt
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: gc-binaries-${{ env.TAG }}
           path: dist/
           retention-days: 30
+
+      - name: Publish rolling release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete personal-latest --yes 2>/dev/null || true
+          git tag -f personal-latest
+          git push origin personal-latest --force
+          gh release create personal-latest dist/* \
+            --title "personal-latest (rolling)" \
+            --notes "Rolling build from \`personal/main\` — built from commit \`$(git rev-parse --short HEAD)\` on $(date -u +%Y-%m-%d).
+
+          ## Install
+
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/dstengle/gascity/personal/main/scripts/install.sh | sh
+          \`\`\`
+
+          See [PERSONAL_BUILD.md](https://github.com/dstengle/gascity/blob/personal/main/.github/PERSONAL_BUILD.md) for details." \
+            --prerelease
 
       - name: Show patch summary
         run: |
