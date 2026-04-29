@@ -4467,6 +4467,106 @@ esac
 	}
 }
 
+// TestGcBeadsBdInitRefusesFallthroughWhenSchemaPresent guards against a
+// startup loop: if ensure_database_registered fails (the dolt server cannot
+// register or USE the database) but the bd schema is in fact present, op_init
+// must NOT fall through to bd init. bd's local-data safety guard would abort,
+// the supervisor would record an init failure, back off, retry — and the loop
+// would never converge.
+func TestGcBeadsBdInitRefusesFallthroughWhenSchemaPresent(t *testing.T) {
+	cityPath := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cityPath, ".gc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cityPath, ".beads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := contract.EnsureCanonicalMetadata(fsys.OSFS{}, filepath.Join(cityPath, ".beads", "metadata.json"), contract.MetadataState{
+		Database:     "dolt",
+		Backend:      "dolt",
+		DoltMode:     "server",
+		DoltDatabase: "hq",
+	}); err != nil {
+		t.Fatalf("EnsureCanonicalMetadata: %v", err)
+	}
+
+	if err := MaterializeBuiltinPacks(cityPath); err != nil {
+		t.Fatalf("MaterializeBuiltinPacks: %v", err)
+	}
+	script := gcBeadsBdScriptPath(cityPath)
+
+	binDir := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fake bd: any invocation is a test failure (op_init must not run
+	// `bd init` here). Record the call so the assertion message is useful.
+	bdCallLog := filepath.Join(t.TempDir(), "bd-calls.log")
+	fakeBd := filepath.Join(binDir, "bd")
+	fakeBdScript := fmt.Sprintf(`#!/bin/sh
+echo "$@" >> %q
+exit 0
+`, bdCallLog)
+	if err := os.WriteFile(fakeBd, []byte(fakeBdScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fake dolt:
+	//   - USE / CREATE DATABASE → exit 1 (ensure_database_registered fails)
+	//   - information_schema.tables probe (csv, "issues") → COUNT=1 (schema present)
+	//   - other queries → exit 0 silently
+	fakeDolt := filepath.Join(binDir, "dolt")
+	fakeDoltScript := `#!/bin/sh
+query=""
+fmt=""
+prev=""
+for arg in "$@"; do
+  case "$prev" in
+    -q) query="$arg" ;;
+    -r) fmt="$arg" ;;
+  esac
+  prev="$arg"
+done
+case "$query" in
+  *information_schema.tables*table_name=\'issues\'*)
+    if [ "$fmt" = "csv" ]; then
+      printf 'cnt\n1\n'
+    else
+      printf '+-----+\n| cnt |\n+-----+\n| 1   |\n+-----+\n'
+    fi
+    exit 0
+    ;;
+  USE*|CREATE\ DATABASE*)
+    echo "fake dolt: refusing $query" >&2
+    exit 1
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`
+	if err := os.WriteFile(fakeDolt, []byte(fakeDoltScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(script, "init", cityPath, "gc", "hq")
+	cmd.Env = sanitizedBaseEnv(
+		"GC_CITY_PATH="+cityPath,
+		"PATH="+strings.Join([]string{binDir, os.Getenv("PATH")}, string(os.PathListSeparator)),
+	)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("op_init should have failed (schema present, registration broken); got success:\n%s", out)
+	}
+	if !strings.Contains(string(out), "bd schema appears present") {
+		t.Fatalf("expected die() message about present schema, got:\n%s", out)
+	}
+	if data, err := os.ReadFile(bdCallLog); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		t.Fatalf("bd was invoked during op_init; calls:\n%s\nscript output:\n%s", data, out)
+	}
+}
+
 func TestEnforceCanonicalScopeMetadataForInitRepairsWrongDoltDatabaseFromExplicitCanonicalIdentity(t *testing.T) {
 	cityPath := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cityPath, ".beads"), 0o700); err != nil {

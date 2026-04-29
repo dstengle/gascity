@@ -259,6 +259,35 @@ database_exists() {
     server_sql "USE \`$db\`" >/dev/null 2>&1
 }
 
+# beads_schema_initialized returns 0 when the bd schema is positively
+# present in the target Dolt database (the canonical 'issues' table
+# exists), and non-zero only when we have positive evidence the schema
+# is missing. An inconclusive probe (transient SQL error, empty output
+# from a stub dolt in tests, etc.) is treated as "present" so that
+# op_init never falls through to a destructive bd init it cannot
+# justify. A populated database must never reach bd's local-data
+# safety guard from a regular gc startup — that guard aborts and
+# traps the supervisor in a perpetual restart loop.
+beads_schema_initialized() {
+    local db="$1"
+    [ -n "$db" ] || return 0
+    if ! valid_sql_name "$db"; then
+        return 0
+    fi
+    local host out cnt
+    host=$(connect_host)
+    if ! out=$(dolt --host "$host" --port "$DOLT_PORT" --user "$DOLT_USER" --password "${DOLT_PASSWORD:-}" --no-tls \
+        sql -r csv -q "SELECT COUNT(*) AS cnt FROM information_schema.tables WHERE table_schema='$db' AND table_name='issues'" 2>/dev/null); then
+        return 0
+    fi
+    cnt=$(printf '%s\n' "$out" | awk 'NF{last=$0} END{print last}' | tr -d '[:space:]')
+    case "$cnt" in
+        0) return 1 ;;
+        '') return 0 ;;
+        *) return 0 ;;
+    esac
+}
+
 read_existing_dolt_database() {
     local meta_file="$1"
     [ -f "$meta_file" ] || return 0
@@ -1762,13 +1791,22 @@ op_init() {
                 backfill_project_id_if_missing "$dir"
                 exit 0
             fi
-            # bd config set failed — beads schema not yet initialized in this
-            # database. The DB exists on the Dolt server (we just registered
-            # it via ensure_database_registered) but has no beads tables yet.
-            # Run `bd init --database $dolt_database` against the existing
-            # empty database to seed the schema in place; this also tolerates
-            # the metadata.json that seedDeferredManagedBeadsBeforeProviderReadiness
-            # already wrote to .beads/.
+            # bd config set failed. Before running bd init against the
+            # registered database, confirm the schema is genuinely absent.
+            # bd's local-data safety guard aborts on any populated .beads/,
+            # and `bd config set issue_prefix` is not a reliable schema
+            # probe (bd v1.0.2+ writes to local config.yaml, succeeding
+            # even on empty DBs; bd v1.0.0 fails for unrelated reasons).
+            # If the schema is present (or the probe is inconclusive),
+            # the failure is a false alarm — the supervisor's reconciler
+            # would otherwise loop on the data-safety abort forever.
+            if beads_schema_initialized "$dolt_database"; then
+                echo "warning: bd config set issue_prefix failed but beads schema is present in '$dolt_database'; treating as healthy" >&2
+                run_bd_pinned "$dir" config set types.custom "$custom_types" 2>/dev/null || true
+                backfill_project_id_if_missing "$dir"
+                exit 0
+            fi
+            # Schema confirmed absent — safe to bd init the empty DB.
             #
             # --database $dolt_database  : adopt the orchestrator-created DB
             #                              (no orphan beads_<prefix> created)
@@ -1808,7 +1846,15 @@ op_init() {
             normalize_scope_after_init "$dir" "$prefix" "$dolt_database"
             exit 0
         else
-            # Database registration failed — fall through to full init.
+            # Database registration failed. Refuse to fall through unless
+            # we can confirm the database is empty: a populated .beads/
+            # would trip bd's local-data safety guard and leave the
+            # supervisor in a perpetual restart loop.
+            if beads_schema_initialized "$dolt_database"; then
+                die "database '$dolt_database' is not visible to the dolt server but bd schema appears present; refusing to bd init over existing data — investigate manually before re-running"
+            fi
+            # Database registration failed and schema is confirmed absent —
+            # fall through to a clean bd init.
             echo "warning: database '$dolt_database' not registered; re-initializing" >&2
         fi
     fi
