@@ -1786,27 +1786,27 @@ op_init() {
             # and bd-specific bootstrap only.
             ensure_beads_dir_permissions "$dir"
             normalize_scope_after_init "$dir" "$prefix" "$dolt_database"
-            if run_bd_pinned "$dir" config set issue_prefix "$prefix" 2>/dev/null; then
-                run_bd_pinned "$dir" config set types.custom "$custom_types" 2>/dev/null || true
-                backfill_project_id_if_missing "$dir"
-                exit 0
-            fi
-            # bd config set failed. Before running bd init against the
-            # registered database, confirm the schema is genuinely absent.
-            # bd's local-data safety guard aborts on any populated .beads/,
-            # and `bd config set issue_prefix` is not a reliable schema
-            # probe (bd v1.0.2+ writes to local config.yaml, succeeding
-            # even on empty DBs; bd v1.0.0 fails for unrelated reasons).
-            # If the schema is present (or the probe is inconclusive),
-            # the failure is a false alarm — the supervisor's reconciler
-            # would otherwise loop on the data-safety abort forever.
+            # The bd schema state in the registered DB is the only signal
+            # we trust. `bd config set issue_prefix` is not a reliable
+            # probe (bd v1.0.2+ writes to local config.yaml regardless,
+            # succeeding even when the DB has no schema) and bd's local-
+            # data safety guard aborts on any populated .beads/. If we
+            # take the fast path against a schema-less DB, `bd create`
+            # later fails with "issue_prefix config is missing" and the
+            # supervisor loops trying to recover.
             if beads_schema_initialized "$dolt_database"; then
-                echo "warning: bd config set issue_prefix failed but beads schema is present in '$dolt_database'; treating as healthy" >&2
+                # Healthy DB. `bd config set issue_prefix` is rejected by
+                # modern bd (1.x) anyway — bd init -p is what writes
+                # issue_prefix into the schema, and that already happened.
                 run_bd_pinned "$dir" config set types.custom "$custom_types" 2>/dev/null || true
                 backfill_project_id_if_missing "$dir"
                 exit 0
             fi
-            # Schema confirmed absent — safe to bd init the empty DB.
+            # Schema confirmed absent — typical first-init case where
+            # seedDeferredManagedBeadsBeforeProviderReadiness wrote
+            # metadata.json before Dolt started, and ensure_database_registered
+            # then created an empty database. Run bd init in place to seed
+            # the schema.
             #
             # --database $dolt_database  : adopt the orchestrator-created DB
             #                              (no orphan beads_<prefix> created)
