@@ -79,3 +79,12 @@ jobs:
           git fetch upstream main -q 2>/dev/null || true
           git log --oneline upstream/main..HEAD >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || \
             git log --oneline -5 >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify devcontainer to rebuild
+        env:
+          GH_TOKEN: ${{ secrets.DEVCONTAINER_DISPATCH_TOKEN }}
+        run: |
+          gh api repos/dstengle/devcontainer-python-node-claude/dispatches \
+            -f event_type=gascity-personal-build-completed \
+            -F "client_payload[gascity_sha]=$(git rev-parse HEAD)" \
+            -F "client_payload[gascity_tag]=${TAG}"
