@@ -22,28 +22,7 @@
 #   gh run watch <run-id>
 
 [[patches]]
-name = "personal-build-infrastructure"
-branch = "chore/personal-build-infrastructure"
-description = "personal-build + sync workflows, rolling release, install script, devcontainer dispatch"
-
-[[patches]]
-name = "issue-1295-init-steps"
-branch = "fix/issue-1295-init-steps"
-description = "ensure beads.role, issue_prefix, and custom types on gc init/start"
-upstream_pr = "https://github.com/gastownhall/gascity/pull/1295"
-
-[[patches]]
 name = "bd-init-fall-through"
 branch = "fix/bd-init-fall-through"
 description = "fall through to bd init when fast-path schema absent on registered DB"
 upstream_pr = "https://github.com/gastownhall/gascity/pull/1477"
-
-[[patches]]
-name = "gc-init-issue-prefix"
-branch = "fix/gc-init-issue-prefix"
-description = "ensure gc init writes issue_prefix into the beads database"
-
-[[patches]]
-name = "bd-init-schema-probe"
-branch = "fix/bd-init-schema-probe"
-description = "probe schema before bd init in op_init fall-throughs"
