@@ -1763,15 +1763,15 @@ op_init() {
                 exit 0
             fi
             # bd config set failed — beads schema not yet initialized in this
-            # database. The DB and .beads/ both exist (we just registered the
-            # DB; metadata.json is already on disk), so plain `bd init` would
-            # abort with the "workspace already initialized" safety check.
+            # database. The DB exists on the Dolt server (we just registered
+            # it via ensure_database_registered) but has no beads tables yet.
+            # Run `bd init --database $dolt_database` against the existing
+            # empty database to seed the schema in place; this also tolerates
+            # the metadata.json that seedDeferredManagedBeadsBeforeProviderReadiness
+            # already wrote to .beads/.
             #
             # --database $dolt_database  : adopt the orchestrator-created DB
             #                              (no orphan beads_<prefix> created)
-            # --reinit-local             : bypass bd's local-data safety check;
-            #                              safe here because bd config set just
-            #                              proved the schema is empty
             echo "warning: beads schema not initialized in '$dolt_database'; running bd init to seed schema" >&2
             local fast_path_host
             fast_path_host=$(connect_host)
@@ -1792,7 +1792,12 @@ op_init() {
                 export GC_DOLT_PASSWORD="$DOLT_PASSWORD"
                 export BEADS_DOLT_SERVER_USER="$DOLT_USER"
                 export BEADS_DOLT_PASSWORD="$DOLT_PASSWORD"
-                bd init --quiet --server --reinit-local                     --database "$dolt_database" -p "$prefix"                     --skip-hooks --skip-agents                     --server-host "$fast_path_host" --server-port "$DOLT_PORT"                     --server-user "$DOLT_USER"                     "$dir"
+                bd init --quiet --server \
+                    --database "$dolt_database" -p "$prefix" \
+                    --skip-hooks --skip-agents \
+                    --server-host "$fast_path_host" --server-port "$DOLT_PORT" \
+                    --server-user "$DOLT_USER" \
+                    "$dir"
             ) || die "bd init failed for $dir (fall-through after schema-less fast path)"
             # bd init -p "$prefix" already wrote issue_prefix into the schema,
             # and modern bd (1.x) actively rejects `bd config set issue_prefix`.

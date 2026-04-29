@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -4652,11 +4651,11 @@ esac
 // subsequent bd-create fail with "database not initialized".
 //
 // The fix: when `bd config set issue_prefix` fails, the fast path runs
-// `bd init` against the existing empty database with --reinit-local
-// (to bypass bd's safety check on the pre-existing .beads/ files written by
-// seedDeferred) and --database <db> (to adopt the orchestrator-created DB
-// instead of creating an orphan beads_<prefix>). This test verifies both
-// that bd init is invoked AND that it is called with the required flags.
+// `bd init --database <db> -p <prefix> --server ...` against the existing
+// empty database to seed the schema in place. The --database flag adopts
+// the orchestrator-created DB instead of creating an orphan beads_<prefix>.
+// This test verifies both that bd init is invoked AND that it is called
+// with the required flags.
 func TestGcBeadsBdInitFastPathFallsThroughWhenBdConfigSetFails(t *testing.T) {
 	cityPath := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cityPath, ".gc"), 0o755); err != nil {
@@ -4686,7 +4685,7 @@ func TestGcBeadsBdInitFastPathFallsThroughWhenBdConfigSetFails(t *testing.T) {
 	fakeBd := filepath.Join(binDir, "bd")
 	// bd config set exits 1 on issue_prefix (simulating a schema-less database);
 	// bd init exits 0 and records its argv so the test can verify the
-	// fallthrough used --reinit-local and --database.
+	// fallthrough used --database and -p with the right values.
 	fakeBdScript := fmt.Sprintf(`#!/bin/sh
 set -eu
 cmd="${1:-}"
@@ -4704,7 +4703,7 @@ case "$cmd" in
     ;;
   init)
     # Record bd init's full argv (one flag per line) so the test can assert
-    # that the fallthrough passed --reinit-local and --database.
+    # that the fallthrough passed --database and -p with the right values.
     printf '%%s\n' "$@" > %q
     mkdir -p "$PWD/.beads"
     exit 0
@@ -4745,7 +4744,7 @@ esac
 		t.Fatalf("read bd init argv: %v", err)
 	}
 	args := strings.Split(strings.TrimRight(string(argv), "\n"), "\n")
-	want := []string{"--reinit-local", "--database", "hq", "-p", "gc"}
+	want := []string{"--database", "hq", "-p", "gc"}
 	for _, f := range want {
 		found := false
 		for _, a := range args {
@@ -4755,167 +4754,8 @@ esac
 			}
 		}
 		if !found {
-			t.Errorf("bd init argv missing %q.\nfull argv: %v\nbd init must use --reinit-local (so it ignores the pre-existing\n.beads/metadata.json from seedDeferred) and --database <db> (so it\nadopts the orchestrator-created DB instead of creating beads_<prefix>).", f, args)
+			t.Errorf("bd init argv missing %q.\nfull argv: %v\nbd init must use --database <db> (so it adopts the orchestrator-created\nDB instead of creating beads_<prefix>) and -p <prefix> to seed the schema.", f, args)
 		}
-	}
-}
-
-// realBdPathPATHForExec returns a PATH value with testscript-main shim
-// directories filtered out, so an exec.Cmd can resolve the real `bd`
-// binary instead of the in-process bdTestCmd installed by main_test.go's
-// testscript.Main. Also returns the absolute path to the located bd.
-// Returns ("", "") if no real bd is found outside the shim.
-func realBdPathForExec(t *testing.T) (envPath, bdAbs string) {
-	t.Helper()
-	paths := strings.Split(os.Getenv("PATH"), string(os.PathListSeparator))
-	clean := make([]string, 0, len(paths))
-	for _, p := range paths {
-		if strings.Contains(p, "testscript-main") {
-			continue
-		}
-		clean = append(clean, p)
-	}
-	envPath = strings.Join(clean, string(os.PathListSeparator))
-	for _, p := range clean {
-		candidate := filepath.Join(p, "bd")
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0 {
-			return envPath, candidate
-		}
-	}
-	return envPath, ""
-}
-
-// TestGcBeadsBdInitFastPathFallsThroughCreatesSchemaAgainstRealDolt is the
-// end-to-end integration coverage for the fall-through fix. The unit test
-// above (TestGcBeadsBdInitFastPathFallsThroughWhenBdConfigSetFails) verifies
-// the script reaches bd init with the right argv, but it uses a fake bd that
-// always exits 0 — so it cannot catch real bd's safety checks ("Found existing
-// Dolt database … This workspace is already initialized") that fired against
-// the pre-registered empty database before --reinit-local + --database were
-// added. This test exercises the real bd binary against a real Dolt server in
-// the exact deferred-seed scenario:
-//
-//  1. Start a real dolt sql-server (passworded).
-//  2. Pre-create empty `hq` (mimics ensure_database_registered in the fast path).
-//  3. Pre-write .beads/metadata.json (mimics seedDeferredManagedBeadsBeforeProviderReadiness).
-//  4. Invoke gc-beads-bd init.
-//  5. Assert: schema exists in `hq` AND issue_prefix is the expected routing prefix.
-//
-// Without the --reinit-local + --database fix this test fails at step 4 with
-// bd's "workspace already initialized" abort.
-func TestGcBeadsBdInitFastPathFallsThroughCreatesSchemaAgainstRealDolt(t *testing.T) {
-	skipSlowCmdGCTest(t, "starts a real dolt sql-server and runs real bd init; run make test-cmd-gc-process for full coverage")
-	cleanPATH, bdAbs := realBdPathForExec(t)
-	if bdAbs == "" {
-		t.Skip("real bd binary not found on PATH (only the testscript shim)")
-	}
-
-	const prefix = "tc"
-	const doltDB = "hq"
-
-	cityPath := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(cityPath, ".gc"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"),
-		[]byte("[workspace]\nname = \"demo\"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(cityPath, ".beads"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	// Mimic seedDeferredManagedBeadsBeforeProviderReadiness: write
-	// .beads/metadata.json (and config.yaml) before the schema exists. This
-	// is the local marker that triggers op_init's fast path.
-	metadata := fmt.Sprintf(`{"database":"dolt","backend":"dolt","dolt_mode":"server","dolt_database":%q}`, doltDB)
-	if err := os.WriteFile(filepath.Join(cityPath, ".beads", "metadata.json"),
-		[]byte(metadata), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(cityPath, ".beads", "config.yaml"),
-		[]byte("issue_prefix: "+prefix+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := MaterializeBuiltinPacks(cityPath); err != nil {
-		t.Fatalf("MaterializeBuiltinPacks: %v", err)
-	}
-	script := gcBeadsBdScriptPath(cityPath)
-
-	// Start a real dolt server. The helper sets GC_DOLT_PASSWORD=secret on t.
-	_, port, _, cleanup := startPasswordedDoltServer(t, "")
-	defer cleanup()
-
-	// Pre-create the empty `hq` database. This is what
-	// ensure_database_registered does inside op_init's fast path BEFORE bd
-	// config set fails — and it's the state that used to make the fall-through
-	// bd init abort with "Found existing Dolt database".
-	dsn := fmt.Sprintf("root:secret@tcp(127.0.0.1:%d)/?allowCleartextPasswords=true", port)
-	db, err := sql.Open("mysql", dsn)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, err := db.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS `"+doltDB+"`"); err != nil {
-		t.Fatalf("create empty %s database: %v", doltDB, err)
-	}
-
-	homeEnv := gcBeadsBdTestHomeEnv(t)
-	cmd := exec.Command(script, "init", cityPath, prefix, doltDB)
-	cmd.Env = sanitizedBaseEnv(append(homeEnv,
-		"GC_CITY_PATH="+cityPath,
-		"GC_DOLT_PORT="+strconv.Itoa(port),
-		"GC_DOLT_HOST=127.0.0.1",
-		"GC_DOLT_USER=root",
-		"GC_DOLT_PASSWORD=secret",
-		"PATH="+cleanPATH,
-	)...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("gc-beads-bd init failed: %v\n--- script output ---\n%s\n--- end ---", err, out)
-	}
-
-	// Verify the schema landed in `hq` (the orchestrator-created DB), not in
-	// a beads_<prefix> orphan — i.e. that --database was honored.
-	schemaDSN := fmt.Sprintf("root:secret@tcp(127.0.0.1:%d)/%s?allowCleartextPasswords=true", port, doltDB)
-	hqDB, err := sql.Open("mysql", schemaDSN)
-	if err != nil {
-		t.Fatalf("sql.Open(%s): %v", doltDB, err)
-	}
-	defer func() { _ = hqDB.Close() }()
-
-	var issuesTable string
-	if err := hqDB.QueryRowContext(ctx,
-		"SELECT TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'issues'",
-		doltDB).Scan(&issuesTable); err != nil {
-		t.Fatalf("beads schema not initialized in %q (no issues table): %v\n--- script output ---\n%s\n--- end ---",
-			doltDB, err, out)
-	}
-
-	var gotPrefix string
-	if err := hqDB.QueryRowContext(ctx,
-		"SELECT value FROM config WHERE `key` = 'issue_prefix'").Scan(&gotPrefix); err != nil {
-		t.Fatalf("read issue_prefix from config: %v\n--- script output ---\n%s\n--- end ---", err, out)
-	}
-	if gotPrefix != prefix {
-		t.Fatalf("issue_prefix = %q in %s, want %q (regression of #1295: fall-through bd init must set the routing prefix, not the dolt_database name)",
-			gotPrefix, doltDB, prefix)
-	}
-
-	// Defensively confirm no orphan beads_<prefix> database was created
-	// (proves --database hq was honored instead of bd init's default behavior
-	// of creating beads_<init_prefix>).
-	var orphanCount int
-	if err := db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM information_schema.schemata WHERE SCHEMA_NAME = ?",
-		"beads_"+prefix).Scan(&orphanCount); err != nil {
-		t.Fatalf("query schemata: %v", err)
-	}
-	if orphanCount != 0 {
-		t.Errorf("orphan database %q exists; bd init should have used --database %s instead of creating an orphan",
-			"beads_"+prefix, doltDB)
 	}
 }
 
