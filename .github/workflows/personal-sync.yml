@@ -1,0 +1,145 @@
+name: Sync personal/main from upstream
+
+# Reads .github/personal-patches.toml from THIS branch (personal-config)
+# and rebuilds personal/main from upstream/main + the manifest's patches.
+# Each [[patches]] entry becomes a single merge commit on personal/main.
+#
+# personal-config holds the manifest + this workflow + PERSONAL_BUILD.md.
+# personal/main is a pure build output — never hand-edited, force-pushed
+# by this workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Show what would happen but don't push"
+        type: boolean
+        default: false
+  schedule:
+    - cron: '0 6 * * *'  # daily at 6am UTC
+  push:
+    branches: [personal-config]
+    paths:
+      - '.github/personal-patches.toml'
+      - '.github/workflows/personal-sync.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    name: Rebuild personal/main from manifest
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: personal-config
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git and fetch upstream
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/gastownhall/gascity.git
+          git fetch upstream main --quiet
+
+      - name: Rebuild personal/main from manifest
+        run: |
+          set -euo pipefail
+
+          MANIFEST=.github/personal-patches.toml
+          if [ ! -f "$MANIFEST" ]; then
+            echo "::error::manifest not found: $MANIFEST"
+            exit 1
+          fi
+
+          # Cache the manifest before the staging checkout — checkout points
+          # the working tree at upstream/main, which does not have the file.
+          MANIFEST_CACHE=$(mktemp)
+          cp "$MANIFEST" "$MANIFEST_CACHE"
+
+          # Stage the rebuilt branch separately so we don't disturb
+          # personal/main if anything below fails.
+          git checkout -B personal-main-staging upstream/main
+
+          python3 - "$MANIFEST_CACHE" <<'PY' > /tmp/patches.tsv
+          import sys, tomllib
+          with open(sys.argv[1], 'rb') as f:
+              data = tomllib.load(f)
+          for p in data.get('patches', []):
+              name = p['name']
+              branch = p['branch']
+              desc = p.get('description', '')
+              upstream_pr = p.get('upstream_pr', '')
+              print(f"{name}\t{branch}\t{desc}\t{upstream_pr}")
+          PY
+
+          {
+            echo "## Patches applied"
+            echo
+            echo "| Status | Name | Branch | Commits | Description |"
+            echo "|--------|------|--------|---------|-------------|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          while IFS=$'\t' read -r name branch desc upstream_pr; do
+            echo ""
+            echo "→ Applying $name ($branch)"
+
+            if ! git fetch origin "$branch" --quiet 2>/dev/null; then
+              echo "::error::branch not found in origin: $branch"
+              echo "| FAIL | \`$name\` | \`$branch\` | — | branch not found |" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            head_sha=$(git rev-parse "origin/$branch")
+
+            base=$(git merge-base HEAD "$head_sha" 2>/dev/null || true)
+            if [ -z "$base" ]; then
+              echo "::error::no merge base between staging HEAD and origin/$branch"
+              exit 1
+            fi
+            ahead=$(git rev-list --count "$base..$head_sha")
+
+            # Empty branch (already absorbed by upstream) — skip and warn.
+            if git diff --quiet "$base" "$head_sha"; then
+              echo "  (empty diff vs base — skipping)"
+              note="branch absorbed by upstream — drop from manifest"
+              if [ -n "$upstream_pr" ]; then
+                note="$note (see $upstream_pr)"
+              fi
+              echo "::warning::$name: $note"
+              echo "| WARN | \`$name\` | \`$branch\` | 0 | $note |" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+
+            if ! git merge --no-ff -m "Merge '$branch' into personal/main
+
+          $desc" "origin/$branch"; then
+              echo "::error::merge of $branch failed"
+              echo "| CONFLICT | \`$name\` | \`$branch\` | $ahead | merge conflict |" >> "$GITHUB_STEP_SUMMARY"
+              git merge --abort 2>/dev/null || true
+              exit 1
+            fi
+
+            echo "| OK | \`$name\` | \`$branch\` | $ahead | $desc |" >> "$GITHUB_STEP_SUMMARY"
+          done < /tmp/patches.tsv
+
+          new_sha=$(git rev-parse personal-main-staging)
+          old_sha=$(git rev-parse origin/personal/main 2>/dev/null || echo "")
+          {
+            echo ""
+            echo "## Result"
+            echo ""
+            echo "- Old head: \`$old_sha\`"
+            echo "- New head: \`$new_sha\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$new_sha" = "$old_sha" ]; then
+            echo "- No change." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Push rebuilt branch
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          git push --force-with-lease origin personal-main-staging:personal/main
