@@ -23,6 +23,5 @@
 
 [[patches]]
 name = "bd-init-fall-through"
-branch = "fix/bd-init-fall-through"
-description = "fall through to bd init when fast-path schema absent on registered DB"
-upstream_pr = "https://github.com/gastownhall/gascity/pull/1477"
+branch = "fix/gc-init-no-prestaged-state"
+description = "stop pre-staging bd metadata + DB before bd init (supersedes bd-init-fall-through)"
