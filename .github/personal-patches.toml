@@ -21,7 +21,8 @@
 #   gh workflow run personal-sync.yml -f dry_run=true
 #   gh run watch <run-id>
 
-[[patches]]
-name = "bd-init-fall-through"
-branch = "fix/gc-init-no-prestaged-state"
-description = "stop pre-staging bd metadata + DB before bd init (supersedes bd-init-fall-through)"
+# No patches currently applied — personal/main = upstream/main.
+# Verifying that upstream's bd-init schema-probe + --force fall-through
+# (merged in commits 9da4f637 and related) resolves the 'gc init' failure
+# without any local patches. After validation, the architectural cleanup
+# branch will be added back here, rebased onto upstream/main.
