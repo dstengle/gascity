@@ -63,6 +63,25 @@ func writeTestGitIdentity(homeDir string) error {
 	return os.WriteFile(gitConfig, data, 0o644)
 }
 
+// gcBeadsBdTestHomeEnv creates a temp HOME with a .gitconfig containing user
+// identity, then returns extra env entries suitable for appending to
+// sanitizedBaseEnv. Used by tests that run the real gc-beads-bd.sh op_init
+// and need a writable global git config.
+func gcBeadsBdTestHomeEnv(t *testing.T) []string {
+	t.Helper()
+	homeDir := filepath.Join(t.TempDir(), "home")
+	if err := os.MkdirAll(homeDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(beads-bd test home): %v", err)
+	}
+	if err := writeTestGitIdentity(homeDir); err != nil {
+		t.Fatalf("write test git identity for beads-bd: %v", err)
+	}
+	return []string{
+		"HOME=" + homeDir,
+		"GIT_CONFIG_GLOBAL=" + filepath.Join(homeDir, ".gitconfig"),
+	}
+}
+
 func writeTestDoltIdentity(homeDir string) error {
 	doltDir := filepath.Join(homeDir, ".dolt")
 	if err := os.MkdirAll(doltDir, 0o755); err != nil {
