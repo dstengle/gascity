@@ -36,7 +36,11 @@ jobs:
         with:
           ref: personal-config
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Use the workflow-scoped PAT so the rebuild push can update
+          # personal/main even when upstream has touched
+          # .github/workflows/*.yml — the standard GITHUB_TOKEN cannot
+          # push workflow file changes.
+          token: ${{ secrets.DEVCONTAINER_DISPATCH_TOKEN }}
 
       - name: Configure git and fetch upstream
         run: |
