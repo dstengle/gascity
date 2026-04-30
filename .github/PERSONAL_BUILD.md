@@ -110,7 +110,7 @@ before pushing.
 ## Installing the binary
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dstengle/gascity/personal/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/dstengle/gascity/personal-config/scripts/install.sh | sh
 ```
 
 Detects OS/arch, downloads from `personal-latest`, installs to
