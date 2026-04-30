@@ -1816,40 +1816,17 @@ op_init() {
     local host
     host=$(connect_host)
 
-    # Register the database with the running server first. CREATE DATABASE
-    # IF NOT EXISTS both creates the on-disk directory and registers it in
-    # the server's catalog. This is the upstream gastown pattern — when the
-    # server is running, always go through SQL rather than dolt init on disk.
-    ensure_database_registered "$dolt_database" || true
-
-    local init_prefix="$prefix"
-    if [ "$dolt_database" != "$prefix" ]; then
-        # When the pinned Dolt database differs from the routing prefix
-        # (for example city prefix gc -> database hq), initialize bd against
-        # the actual database name and then rewrite issue_prefix afterward.
-        # Otherwise bd seeds schema into <prefix> and leaves the pinned
-        # database empty.
-        init_prefix="$dolt_database"
-    fi
-
-    # Run bd init in server mode.
-    (cd "$dir" && bd init --quiet --server -p "$init_prefix" --skip-hooks --skip-agents         --server-host "$host" --server-port "$DOLT_PORT"         "$dir") || die "bd init failed for $dir"
-
-    # Drop orphan database created by bd init (upstream gt-sv1h).
-    # bd init --prefix creates beads_<prefix> on the Dolt server, but we
-    # use <prefix> as the database name. Without cleanup, orphans accumulate.
-    local orphan_db="beads_${init_prefix}"
-    if [ "$orphan_db" != "$init_prefix" ]; then
-        server_sql "DROP DATABASE IF EXISTS \`$orphan_db\`" >/dev/null 2>&1 || true
-    fi
+    # Run bd init in server mode. --database pins the exact Dolt database
+    # name (independent of -p, the routing prefix); bd creates the database
+    # on the server with that name. Caller must NOT pre-create the database
+    # or pre-seed .beads/metadata.json — bd's local-data safety check would
+    # then refuse the init. The fast-path branch above handles re-runs where
+    # those files already exist.
+    (cd "$dir" && bd init --quiet --server --database "$dolt_database" -p "$prefix" --skip-hooks --skip-agents         --server-host "$host" --server-port "$DOLT_PORT"         "$dir") || die "bd init failed for $dir"
 
     # GC owns canonical metadata/config normalization after this backend
     # bridge returns. Keep bd-specific config/migration here only.
     ensure_beads_dir_permissions "$dir"
-
-    # Keep bd's runtime config in sync with GC's canonical prefix. This is
-    # compatibility state for raw bd operations, not a second GC authority.
-    run_bd_pinned "$dir" config set issue_prefix "$prefix" 2>/dev/null || true
 
     # Configure custom bead types (required since beads v0.46.0).
     run_bd_pinned "$dir" config set types.custom "$custom_types" 2>/dev/null || true

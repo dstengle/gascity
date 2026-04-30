@@ -144,12 +144,10 @@ func runInitProviderPreflight(cityPath string, stdout, stderr io.Writer, command
 		return errInitProviderPreflight
 	}
 	ensureInitArtifacts(cityPath, stderr, commandName)
-	if err := seedDeferredManagedBeadsBeforeProviderReadiness(cityPath, cfg); err != nil {
-		fmt.Fprintf(stderr, "%s: city created, but startup is blocked by bead store initialization\n", commandName) //nolint:errcheck // best-effort stderr
-		fmt.Fprintf(stderr, "%s: initializing canonical bead store files: %v\n", commandName, err)                  //nolint:errcheck // best-effort stderr
-		fmt.Fprintf(stderr, "%s: fix the bead store issue, then run 'gc start'\n", commandName)                     //nolint:errcheck // best-effort stderr
-		return errInitProviderPreflight
-	}
+	// Canonical .beads/metadata.json is no longer seeded here. bd init
+	// (run later in the init flow) creates it as part of schema seeding,
+	// and bd's local-data safety check refuses to run if the file is
+	// pre-staged before bd init owns the directory.
 	targets, warnings, err := collectInitProviderTargets(cfg)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: city created, but startup is blocked by provider resolution\n", commandName) //nolint:errcheck // best-effort stderr
